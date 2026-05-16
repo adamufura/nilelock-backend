@@ -135,6 +135,81 @@ export async function runLockCommand(
   return { lockId: slug, state: lock.state as "locked" | "unlocked" };
 }
 
+const publicUnlockSchema = z.object({
+  passcode: z.string().min(4).max(16).optional(),
+});
+
+/** Campus simulator kiosk: unlock with visitor passcode (no login). */
+export async function unlockLockFromSimulator(
+  io: SocketIOServer,
+  lockRef: string,
+  body: unknown,
+): Promise<{ lockId: string; state: "locked" | "unlocked" }> {
+  const { passcode } = publicUnlockSchema.parse(body);
+  const lock = await findLockByRef(lockRef);
+  if (!lock) throw new AppError(404, "Lock not found");
+
+  const owners = getLockOwners(lock);
+  const eventUser = owners[0];
+  if (!eventUser) throw new AppError(500, "Lock has no assigned owner");
+
+  const channel: ClientChannel = "simulator";
+  const action = "unlock" as const;
+
+  if (lock.state === "unlocked") {
+    return { lockId: lock.slug, state: "unlocked" };
+  }
+
+  const activeCount = await Passcode.countDocuments({ lock: lock._id, active: true });
+  if (activeCount > 0) {
+    if (!passcode?.trim()) {
+      await LockEvent.create({
+        lock: lock._id,
+        user: eventUser,
+        action,
+        outcome: "denied",
+        channel,
+        detail: "passcode_required",
+      });
+      throw new AppError(400, "Passcode required");
+    }
+    const ok = await anyPasscodeMatches(lock._id, passcode.trim());
+    if (!ok) {
+      await LockEvent.create({
+        lock: lock._id,
+        user: eventUser,
+        action,
+        outcome: "denied",
+        channel,
+        detail: "bad_passcode",
+      });
+      throw new AppError(403, "Invalid passcode");
+    }
+  }
+
+  lock.state = "unlocked";
+  await lock.save();
+
+  await LockEvent.create({
+    lock: lock._id,
+    user: eventUser,
+    action,
+    outcome: "success",
+    channel,
+    detail: "public_kiosk",
+  });
+
+  const slug = lock.slug;
+  const payload = {
+    lockId: slug,
+    state: lock.state as "locked" | "unlocked",
+    updatedAt: lock.updatedAt?.toISOString() ?? new Date().toISOString(),
+  };
+  emitToLockChannels(io, slug, "lock:state", payload);
+
+  return { lockId: slug, state: "unlocked" };
+}
+
 const createLockSchema = z.object({
   name: z.string().min(1).max(120).trim(),
   location: z.string().max(200).trim().optional(),

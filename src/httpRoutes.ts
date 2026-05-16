@@ -52,7 +52,7 @@ export function registerHttpRoutes(
     });
   });
 
-  app.use("/api/public", createPublicRouter());
+  app.use("/api/public", createPublicRouter(io));
 
   const auth = authMiddleware(env);
 
