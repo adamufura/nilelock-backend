@@ -5,11 +5,40 @@ import { LockEvent } from "../models/LockEvent.js";
 import { Lock } from "../models/Lock.js";
 
 type PopulatedLock = { _id: mongoose.Types.ObjectId; slug?: string; name?: string };
+type PopulatedUser = { _id: mongoose.Types.ObjectId; email?: string; fullName?: string };
 
 function eventLockId(lock: unknown): string {
-  const L = lock as PopulatedLock;
-  if (L?.slug) return L.slug;
-  return L?._id?.toString() ?? "";
+  const L = lock as PopulatedLock | null;
+  if (!L) return "";
+  if (L.slug) return L.slug;
+  return L._id?.toString() ?? "";
+}
+
+function serializeEvent(e: {
+  _id: mongoose.Types.ObjectId;
+  lock: unknown;
+  user: unknown;
+  action: string;
+  outcome: string;
+  channel: string;
+  detail?: string;
+  createdAt?: Date;
+}) {
+  const lock = e.lock as PopulatedLock | null;
+  const user = e.user as PopulatedUser | null;
+  return {
+    id: e._id.toString(),
+    lockId: eventLockId(lock),
+    lockName: lock?.name ?? "",
+    userId: user?._id?.toString() ?? "",
+    userEmail: user?.email ?? "",
+    userFullName: user?.fullName ?? "",
+    action: e.action,
+    outcome: e.outcome,
+    channel: e.channel,
+    detail: e.detail ?? "",
+    createdAt: e.createdAt,
+  };
 }
 
 export function createEventsRouter(): Router {
@@ -31,18 +60,7 @@ export function createEventsRouter(): Router {
         .lean();
 
       res.json({
-        events: events.map((e) => ({
-          id: e._id.toString(),
-          lockId: eventLockId(e.lock),
-          lockName: (e.lock as PopulatedLock).name ?? "",
-          userId: (e.user as { _id: mongoose.Types.ObjectId })._id.toString(),
-          userEmail: (e.user as { email?: string }).email ?? "",
-          action: e.action,
-          outcome: e.outcome,
-          channel: e.channel,
-          detail: e.detail,
-          createdAt: e.createdAt,
-        })),
+        events: events.map(serializeEvent),
       });
     }),
   );
@@ -67,18 +85,7 @@ export function createEventsRouter(): Router {
         .lean();
 
       res.json({
-        events: events.map((e) => ({
-          id: e._id.toString(),
-          lockId: eventLockId(e.lock),
-          lockName: (e.lock as PopulatedLock).name ?? "",
-          userId: (e.user as { _id: mongoose.Types.ObjectId })._id.toString(),
-          userEmail: (e.user as { email?: string }).email ?? "",
-          action: e.action,
-          outcome: e.outcome,
-          channel: e.channel,
-          detail: e.detail,
-          createdAt: e.createdAt,
-        })),
+        events: events.map(serializeEvent),
       });
     }),
   );

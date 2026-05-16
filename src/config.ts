@@ -57,7 +57,13 @@ function originMatchesEasypanelSuffix(origin: string, suffix: string): boolean {
 }
 
 const CORS_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"] as const;
-const CORS_ALLOWED_HEADERS = ["Content-Type", "Authorization"];
+/** Must include custom headers sent by admin/mobile or preflight fails (browser shows "CORS error"). */
+const CORS_ALLOWED_HEADERS = [
+  "Content-Type",
+  "Authorization",
+  "X-Client-Channel",
+  "x-client-channel",
+];
 
 /**
  * Default: allow any browser origin (admin, simulator, mobile web).
