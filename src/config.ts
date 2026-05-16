@@ -1,3 +1,4 @@
+import type { CorsOptions } from "cors";
 import { z } from "zod";
 
 const envSchema = z.object({
@@ -28,10 +29,67 @@ export function loadEnv(): Env {
   return parsed.data;
 }
 
-export function parseCorsOrigins(raw: string | undefined): string[] | true {
-  if (!raw?.trim()) return true;
+export function parseCorsOriginsList(raw: string | undefined): string[] {
+  if (!raw?.trim()) return [];
   return raw
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
+}
+
+/** @deprecated Prefer {@link createCorsOptions} */
+export function parseCorsOrigins(raw: string | undefined): string[] | true {
+  const list = parseCorsOriginsList(raw);
+  return list.length === 0 ? true : list;
+}
+
+function originMatchesEasypanelSuffix(origin: string, suffix: string): boolean {
+  try {
+    const u = new URL(origin);
+    const host = u.hostname;
+    return (
+      u.protocol === "https:" &&
+      (host === suffix || host.endsWith(`.${suffix}`))
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function createCorsOptions(env: Env): CorsOptions {
+  const explicit = parseCorsOriginsList(env.CORS_ORIGIN);
+  const strict = process.env.CORS_STRICT === "true";
+  const easypanelSuffix =
+    process.env.CORS_EASYPANEL_SUFFIX?.trim() ||
+    (env.NODE_ENV === "production" ? "o9oxxq.easypanel.host" : undefined);
+
+  const isAllowed = (origin: string): boolean => {
+    if (explicit.includes(origin)) return true;
+    if (strict || !easypanelSuffix) return false;
+    return originMatchesEasypanelSuffix(origin, easypanelSuffix);
+  };
+
+  return {
+    origin(origin, callback) {
+      if (!origin) {
+        callback(null, true);
+        return;
+      }
+      if (
+        explicit.length === 0 &&
+        !strict &&
+        env.NODE_ENV !== "production"
+      ) {
+        callback(null, true);
+        return;
+      }
+      if (isAllowed(origin)) {
+        callback(null, true);
+        return;
+      }
+      callback(new Error(`CORS blocked origin: ${origin}`));
+    },
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  };
 }

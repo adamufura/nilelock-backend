@@ -2,7 +2,7 @@ import "dotenv/config";
 import express from "express";
 import { createServer } from "node:http";
 import { Server as SocketIOServer } from "socket.io";
-import { loadEnv, parseCorsOrigins } from "./config.js";
+import { createCorsOptions, loadEnv } from "./config.js";
 import { connectMongo, disconnectMongo } from "./db.js";
 import { migrateLocksSchema } from "./migrations/ensureLockSlugs.js";
 import { registerHttpRoutes } from "./httpRoutes.js";
@@ -14,10 +14,13 @@ async function main() {
 
   const app = express();
   const httpServer = createServer(app);
-  const corsOrigins = parseCorsOrigins(env.CORS_ORIGIN);
+  const corsOptions = createCorsOptions(env);
 
   const io = new SocketIOServer(httpServer, {
-    cors: { origin: corsOrigins },
+    cors: {
+      origin: corsOptions.origin,
+      methods: corsOptions.methods,
+    },
   });
 
   await connectMongo(env.MONGODB_URI, env.MONGODB_DB_NAME);

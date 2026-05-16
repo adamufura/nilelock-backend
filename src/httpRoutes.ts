@@ -7,7 +7,7 @@ import mongoose from "mongoose";
 import rateLimit from "express-rate-limit";
 import type { Server as SocketIOServer } from "socket.io";
 import type { Env } from "./config.js";
-import { parseCorsOrigins } from "./config.js";
+import { createCorsOptions } from "./config.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 import { authMiddleware, requireAdmin } from "./middleware/auth.js";
 import { createAuthRouter } from "./routes/auth.js";
@@ -24,10 +24,8 @@ export function registerHttpRoutes(
   deps: { env: Env; io: SocketIOServer },
 ): void {
   const { env, io } = deps;
-  const corsOrigins = parseCorsOrigins(env.CORS_ORIGIN);
-
   app.use(helmet());
-  app.use(cors({ origin: corsOrigins }));
+  app.use(cors(createCorsOptions(env)));
   app.use(express.json({ limit: "64kb" }));
   app.use(morgan(env.NODE_ENV === "production" ? "combined" : "dev"));
 
