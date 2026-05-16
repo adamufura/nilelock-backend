@@ -7,3 +7,6 @@ dist
 # macOS AppleDouble / resource fork sidecars (break UTF-8 parsing in CI)
 ._*
 **/._*
+
+# Local Easypanel upload bundle (git-tracked files only; no dist/node_modules)
+nilelock-backend-easypanel.zip

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "nodemon",
     "build": "rm -rf dist && tsc",
+    "easypanel:archive": "git archive --format=zip --prefix=nilelock-backend/ -o nilelock-backend-easypanel.zip HEAD",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
     "test:api": "tsx scripts/test-api.ts",
