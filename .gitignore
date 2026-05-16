@@ -3,3 +3,7 @@ dist
 .env
 *.log
 .DS_Store
+
+# macOS AppleDouble / resource fork sidecars (break UTF-8 parsing in CI)
+._*
+**/._*
