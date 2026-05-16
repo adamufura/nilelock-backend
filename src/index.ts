@@ -18,8 +18,9 @@ async function main() {
 
   const io = new SocketIOServer(httpServer, {
     cors: {
-      origin: corsOptions.origin,
+      origin: corsOptions.origin ?? true,
       methods: corsOptions.methods,
+      allowedHeaders: corsOptions.allowedHeaders,
     },
   });
 

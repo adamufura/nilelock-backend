@@ -48,7 +48,7 @@ function originMatchesEasypanelSuffix(origin: string, suffix: string): boolean {
     const u = new URL(origin);
     const host = u.hostname;
     return (
-      u.protocol === "https:" &&
+      (u.protocol === "https:" || u.protocol === "http:") &&
       (host === suffix || host.endsWith(`.${suffix}`))
     );
   } catch {
@@ -56,30 +56,39 @@ function originMatchesEasypanelSuffix(origin: string, suffix: string): boolean {
   }
 }
 
-export function createCorsOptions(env: Env): CorsOptions {
-  const explicit = parseCorsOriginsList(env.CORS_ORIGIN);
-  const strict = process.env.CORS_STRICT === "true";
-  const easypanelSuffix =
-    process.env.CORS_EASYPANEL_SUFFIX?.trim() ||
-    (env.NODE_ENV === "production" ? "o9oxxq.easypanel.host" : undefined);
+const CORS_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"] as const;
+const CORS_ALLOWED_HEADERS = ["Content-Type", "Authorization"];
 
-  const isAllowed = (origin: string): boolean => {
-    if (explicit.includes(origin)) return true;
-    if (strict || !easypanelSuffix) return false;
-    return originMatchesEasypanelSuffix(origin, easypanelSuffix);
-  };
+/**
+ * Default: allow any browser origin (admin, simulator, mobile web).
+ * Set CORS_STRICT=true to use only CORS_ORIGIN + *.CORS_EASYPANEL_SUFFIX.
+ */
+export function createCorsOptions(_env: Env): CorsOptions {
+  const strict = process.env.CORS_STRICT === "true";
+  const allowAll =
+    !strict &&
+    (process.env.CORS_ALLOW_ALL === "true" ||
+      process.env.CORS_ALLOW_ALL !== "false");
+
+  if (allowAll) {
+    return {
+      origin: true,
+      methods: [...CORS_METHODS],
+      allowedHeaders: [...CORS_ALLOWED_HEADERS],
+    };
+  }
+
+  const explicit = parseCorsOriginsList(process.env.CORS_ORIGIN);
+  const easypanelSuffix =
+    process.env.CORS_EASYPANEL_SUFFIX?.trim() || "o9oxxq.easypanel.host";
+
+  const isAllowed = (origin: string): boolean =>
+    explicit.includes(origin) ||
+    originMatchesEasypanelSuffix(origin, easypanelSuffix);
 
   return {
     origin(origin, callback) {
       if (!origin) {
-        callback(null, true);
-        return;
-      }
-      if (
-        explicit.length === 0 &&
-        !strict &&
-        env.NODE_ENV !== "production"
-      ) {
         callback(null, true);
         return;
       }
@@ -89,7 +98,7 @@ export function createCorsOptions(env: Env): CorsOptions {
       }
       callback(new Error(`CORS blocked origin: ${origin}`));
     },
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    methods: [...CORS_METHODS],
+    allowedHeaders: [...CORS_ALLOWED_HEADERS],
   };
 }
