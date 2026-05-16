@@ -1,0 +1,14 @@
+# Easypanel sets NODE_ENV=production at build time; still need devDeps for `tsc`.
+[variables]
+NIXPACKS_NODE_VERSION = "22"
+NPM_CONFIG_PRODUCTION = "false"
+
+[phases.install]
+cmds = ["npm ci --include=dev"]
+
+[phases.build]
+cmds = ["npm run build"]
+dependsOn = ["install"]
+
+[start]
+cmd = "npm run start"
