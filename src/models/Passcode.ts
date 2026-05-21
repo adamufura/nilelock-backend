@@ -7,6 +7,8 @@ const passcodeSchema = new Schema(
     forUser: { type: Schema.Types.ObjectId, ref: "User", default: null, index: true },
     hash: { type: String, required: true },
     active: { type: Boolean, required: true, default: true },
+    /** When set, passcode stops working after this instant (UTC). */
+    expiresAt: { type: Date, default: null, index: true },
     createdBy: { type: Schema.Types.ObjectId, ref: "User", required: true },
   },
   { timestamps: true },

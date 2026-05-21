@@ -8,6 +8,7 @@ import { Lock } from "../models/Lock.js";
 import { Passcode } from "../models/Passcode.js";
 import { User } from "../models/User.js";
 import { findLockByRef } from "../lib/lockResolver.js";
+import { activeNonExpiredPasscodeFilter } from "../lib/passcodeExpiry.js";
 import { unlockLockFromSimulator } from "../services/lockService.js";
 
 function paramId(value: string | string[] | undefined): string {
@@ -58,7 +59,10 @@ export function createPublicRouter(io: SocketIOServer): Router {
         .lean();
 
       const passcodeRequired =
-        (await Passcode.countDocuments({ lock: lock._id, active: true })) > 0;
+        (await Passcode.countDocuments({
+          lock: lock._id,
+          ...activeNonExpiredPasscodeFilter(),
+        })) > 0;
 
       res.json({
         lock: {

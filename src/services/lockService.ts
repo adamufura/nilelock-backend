@@ -11,6 +11,12 @@ import { randomInt } from "node:crypto";
 import { findLockByRef } from "../lib/lockResolver.js";
 import { isLockSlugPattern, normalizeLockSlug } from "../lib/lockSlug.js";
 import { allocateUniqueSlugFromName } from "../lib/uniqueLockSlug.js";
+import {
+  activeNonExpiredPasscodeFilter,
+  expiresAtFromPreset,
+  isPasscodeStillValid,
+  passcodeExpiresInSchema,
+} from "../lib/passcodeExpiry.js";
 
 const channelSchema = z.enum(["mobile", "dashboard", "simulator", "api"]);
 
@@ -46,12 +52,24 @@ function emitToLockChannels(io: SocketIOServer, slug: string, event: string, pay
   io.of("/public").to(`lock:${slug}`).emit(event, payload);
 }
 
-async function anyPasscodeMatches(lockObjId: mongoose.Types.ObjectId, code: string): Promise<boolean> {
+type PasscodeVerifyResult = "valid" | "expired" | "invalid";
+
+async function verifyPasscodeForLock(
+  lockObjId: mongoose.Types.ObjectId,
+  code: string,
+): Promise<PasscodeVerifyResult> {
   const active = await Passcode.find({ lock: lockObjId, active: true }).lean();
+  let expiredMatch = false;
   for (const p of active) {
-    if (await bcrypt.compare(code, p.hash)) return true;
+    if (!(await bcrypt.compare(code, p.hash))) continue;
+    if (isPasscodeStillValid(p.expiresAt as Date | null | undefined)) return "valid";
+    expiredMatch = true;
   }
-  return false;
+  return expiredMatch ? "expired" : "invalid";
+}
+
+async function countActiveNonExpiredPasscodes(lockObjId: mongoose.Types.ObjectId): Promise<number> {
+  return Passcode.countDocuments({ lock: lockObjId, ...activeNonExpiredPasscodeFilter() });
 }
 
 export async function runLockCommand(
@@ -83,7 +101,7 @@ export async function runLockCommand(
   }
 
   if (action === "unlock" && channel === "simulator") {
-    const activeCount = await Passcode.countDocuments({ lock: lock._id, active: true });
+    const activeCount = await countActiveNonExpiredPasscodes(lock._id);
     if (activeCount > 0) {
       if (!passcode) {
         await LockEvent.create({
@@ -96,8 +114,19 @@ export async function runLockCommand(
         });
         throw new AppError(400, "Passcode required for simulator unlock");
       }
-      const ok = await anyPasscodeMatches(lock._id, passcode);
-      if (!ok) {
+      const verify = await verifyPasscodeForLock(lock._id, passcode);
+      if (verify === "expired") {
+        await LockEvent.create({
+          lock: lock._id,
+          user: params.auth.userId,
+          action,
+          outcome: "denied",
+          channel,
+          detail: "passcode_expired",
+        });
+        throw new AppError(403, "Passcode has expired");
+      }
+      if (verify !== "valid") {
         await LockEvent.create({
           lock: lock._id,
           user: params.auth.userId,
@@ -160,7 +189,7 @@ export async function unlockLockFromSimulator(
     return { lockId: lock.slug, state: "unlocked" };
   }
 
-  const activeCount = await Passcode.countDocuments({ lock: lock._id, active: true });
+  const activeCount = await countActiveNonExpiredPasscodes(lock._id);
   if (activeCount > 0) {
     if (!passcode?.trim()) {
       await LockEvent.create({
@@ -173,8 +202,19 @@ export async function unlockLockFromSimulator(
       });
       throw new AppError(400, "Passcode required");
     }
-    const ok = await anyPasscodeMatches(lock._id, passcode.trim());
-    if (!ok) {
+    const verify = await verifyPasscodeForLock(lock._id, passcode.trim());
+    if (verify === "expired") {
+      await LockEvent.create({
+        lock: lock._id,
+        user: eventUser,
+        action,
+        outcome: "denied",
+        channel,
+        detail: "passcode_expired",
+      });
+      throw new AppError(403, "Passcode has expired");
+    }
+    if (verify !== "valid") {
       await LockEvent.create({
         lock: lock._id,
         user: eventUser,
@@ -346,7 +386,7 @@ export async function verifyPasscodeOnly(
   lockRef: string,
   body: unknown,
   auth: { userId: mongoose.Types.ObjectId; role: "admin" | "user" },
-): Promise<{ valid: boolean }> {
+): Promise<{ valid: boolean; expired?: boolean }> {
   const { code } = verifyPasscodeBodySchema.parse(body);
 
   const lock = await findLockByRef(lockRef);
@@ -356,32 +396,64 @@ export async function verifyPasscodeOnly(
     throw new AppError(403, "You do not have access to this lock");
   }
 
-  const ok = await anyPasscodeMatches(lock._id, code);
-  return { valid: ok };
+  const verify = await verifyPasscodeForLock(lock._id, code);
+  return { valid: verify === "valid", expired: verify === "expired" };
 }
 
 export async function getPasscodeMeta(
   lockRef: string,
   auth: { userId: mongoose.Types.ObjectId; role: "admin" | "user" },
-): Promise<{ hasPasscode: boolean }> {
+): Promise<{
+  hasPasscode: boolean;
+  expiresAt?: string;
+  expiresIn?: string;
+  expired?: boolean;
+}> {
   const lock = await findLockByRef(lockRef);
   if (!lock) throw new AppError(404, "Lock not found");
   const owners = getLockOwners(lock);
   if (!canAccessLock(auth.role, auth.userId, owners)) {
     throw new AppError(403, "You do not have access to this lock");
   }
-  const has = await Passcode.exists({
+  const doc = await Passcode.findOne({
     lock: lock._id,
     forUser: auth.userId,
     active: true,
-  });
-  return { hasPasscode: Boolean(has) };
+  })
+    .select("expiresAt _id")
+    .lean();
+
+  if (!doc) {
+    return { hasPasscode: false };
+  }
+
+  const expiresAt = doc.expiresAt as Date | null | undefined;
+  if (!isPasscodeStillValid(expiresAt)) {
+    await Passcode.updateOne({ _id: doc._id }, { $set: { active: false } });
+    return {
+      hasPasscode: false,
+      expired: true,
+      expiresAt: expiresAt?.toISOString(),
+    };
+  }
+
+  return {
+    hasPasscode: true,
+    expiresAt: expiresAt?.toISOString(),
+  };
 }
+
+const generatePasscodeBodySchema = z.object({
+  expiresIn: passcodeExpiresInSchema,
+});
 
 export async function generateRandomPasscode(
   lockRef: string,
+  body: unknown,
   auth: { userId: mongoose.Types.ObjectId; role: "admin" | "user" },
-): Promise<{ code: string }> {
+): Promise<{ code: string; expiresAt: string; expiresIn: string }> {
+  const { expiresIn } = generatePasscodeBodySchema.parse(body);
+
   const lock = await findLockByRef(lockRef);
   if (!lock) throw new AppError(404, "Lock not found");
   const owners = getLockOwners(lock);
@@ -389,6 +461,7 @@ export async function generateRandomPasscode(
     throw new AppError(403, "You do not have access to this lock");
   }
 
+  const expiresAt = expiresAtFromPreset(expiresIn);
   const code = Array.from({ length: 4 }, () => randomInt(0, 10)).join("");
   await Passcode.updateMany(
     { lock: lock._id, forUser: auth.userId },
@@ -400,17 +473,22 @@ export async function generateRandomPasscode(
     forUser: auth.userId,
     hash,
     active: true,
+    expiresAt,
     createdBy: auth.userId,
   });
-  return { code };
+  return { code, expiresAt: expiresAt.toISOString(), expiresIn };
 }
+
+const setPasscodeBodySchema = passcodeBodySchema.extend({
+  expiresIn: passcodeExpiresInSchema,
+});
 
 export async function setLockPasscode(
   lockRef: string,
   body: unknown,
   auth: { userId: mongoose.Types.ObjectId; role: "admin" | "user" },
-): Promise<{ ok: true }> {
-  const { code } = passcodeBodySchema.parse(body);
+): Promise<{ ok: true; expiresAt: string; expiresIn: string }> {
+  const { code, expiresIn } = setPasscodeBodySchema.parse(body);
 
   const lock = await findLockByRef(lockRef);
   if (!lock) throw new AppError(404, "Lock not found");
@@ -419,6 +497,7 @@ export async function setLockPasscode(
     throw new AppError(403, "You do not have access to this lock");
   }
 
+  const expiresAt = expiresAtFromPreset(expiresIn);
   await Passcode.updateMany(
     { lock: lock._id, forUser: auth.userId },
     { $set: { active: false } },
@@ -429,10 +508,11 @@ export async function setLockPasscode(
     forUser: auth.userId,
     hash,
     active: true,
+    expiresAt,
     createdBy: auth.userId,
   });
 
-  return { ok: true };
+  return { ok: true, expiresAt: expiresAt.toISOString(), expiresIn };
 }
 
 export async function deleteLock(io: SocketIOServer, lockRef: string): Promise<void> {

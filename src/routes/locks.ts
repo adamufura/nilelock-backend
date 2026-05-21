@@ -118,8 +118,8 @@ export function createLocksRouter(io: SocketIOServer): Router {
       if (!lockRef.trim()) {
         throw new AppError(400, "Lock identifier required");
       }
-      const { code } = await generateRandomPasscode(lockRef, req.auth!);
-      res.status(201).json({ code });
+      const result = await generateRandomPasscode(lockRef, req.body, req.auth!);
+      res.status(201).json(result);
     }),
   );
 
